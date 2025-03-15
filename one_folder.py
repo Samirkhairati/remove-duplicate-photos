@@ -6,15 +6,18 @@ from PIL import Image
 from pillow_heif import register_heif_opener
 from tqdm import tqdm
 
-# Register HEIF support (to handle HEIC files)
+# Register HEIF support
 register_heif_opener()
 
+# Optimized thread count
+MAX_THREADS = min(32, os.cpu_count() * 2)
+
 def clean_up_videos(folder, video_output_folder):
-    """Remove MP4s if a matching HEIC exists. Move standalone MP4s & MOVs to `videos/`."""
+    """Deletes MP4s if a matching HEIC exists & moves standalone MP4s/MOVs to videos/."""
     heic_files = {os.path.splitext(entry.name)[0] for entry in os.scandir(folder) if entry.name.lower().endswith('.heic')}
     
     os.makedirs(video_output_folder, exist_ok=True)
-    files = list(os.scandir(folder))  # Convert to list for tqdm
+    files = list(os.scandir(folder))
 
     for idx, entry in enumerate(tqdm(files, desc=f"🔍 Cleaning {folder}", unit="file")):
         file_path = entry.path
@@ -42,11 +45,11 @@ def get_image_hash(image_path):
         return None
 
 def process_images(folder):
-    """Scan & hash images with a progress bar (multithreading for speed)."""
+    """Scans & hashes images with multithreading and progress tracking."""
     image_hashes = {}
     files = [entry for entry in os.scandir(folder) if entry.name.lower().endswith(('.heic', '.jpg', '.png'))]
 
-    with concurrent.futures.ThreadPoolExecutor() as executor:
+    with concurrent.futures.ThreadPoolExecutor(max_workers=MAX_THREADS) as executor:
         futures = {executor.submit(get_image_hash, entry.path): entry.path for entry in files}
 
         for idx, future in enumerate(tqdm(concurrent.futures.as_completed(futures), desc=f"🔍 Hashing {folder}", total=len(files), unit="file")):
@@ -56,17 +59,21 @@ def process_images(folder):
                 image_hashes[img_hash] = file_path
             print(f"[{idx+1}/{len(files)}] 🖼️ Hashed {os.path.basename(file_path)}")
 
-    return image_hashes
+    return image_hashes, len(files)
 
 def copy_image(src, dest_folder, idx, total):
-    """Copy an image with progress tracking."""
+    """Copies an image with progress tracking."""
     os.makedirs(dest_folder, exist_ok=True)
     shutil.copy2(src, os.path.join(dest_folder, os.path.basename(src)))
     print(f"[{idx+1}/{total}] ✅ Copied {os.path.basename(src)} → {dest_folder}")
 
 def remove_duplicates_and_store_unique(folder_c, output_folder):
     """Find duplicates within a single folder and store only unique images in `output2/`."""
-    images_c = process_images(folder_c)
+    print("\n🔍 Step 2: Detecting duplicates and storing unique images...")
+    
+    images_c, total_files_before = process_images(folder_c)
+    unique_files = len(images_c)
+    duplicate_files = total_files_before - unique_files  # Duplicates found
 
     folders = {
         "Unique": os.path.join(output_folder, "Unique"),
@@ -77,15 +84,19 @@ def remove_duplicates_and_store_unique(folder_c, output_folder):
         os.makedirs(folder, exist_ok=True)
 
     files_to_copy = list(images_c.values())
-    total_files = len(files_to_copy)
+    total_files_after = len(files_to_copy)
 
-    with concurrent.futures.ThreadPoolExecutor() as executor:
-        futures = {executor.submit(copy_image, file_path, folders["Unique"], idx, total_files): file_path for idx, file_path in enumerate(files_to_copy)}
+    with concurrent.futures.ThreadPoolExecutor(max_workers=MAX_THREADS) as executor:
+        futures = {executor.submit(copy_image, file_path, folders["Unique"], idx, total_files_after) for idx, file_path in enumerate(files_to_copy)}
 
         for future in concurrent.futures.as_completed(futures):
             future.result()  # Wait for all tasks to complete
 
-    print("\n✅ Duplicate removal complete! Unique images stored in `output2/`.")
+    # Print summary
+    print("\n✅ Duplicate removal complete!")
+    print(f"📂 Total files before processing: {total_files_before}")
+    print(f"📂 Total unique files after processing: {total_files_after}")
+    print(f"❌ Total duplicate files removed: {duplicate_files}")
 
 if __name__ == "__main__":
     folder_c = "./C"
@@ -95,7 +106,6 @@ if __name__ == "__main__":
         print("\n🔍 Step 1: Cleaning up videos (MP4 & MOV files)...")
         clean_up_videos(folder_c, os.path.join(output_folder, "videos"))
 
-        print("\n🔍 Step 2: Detecting duplicates and storing unique images...")
         remove_duplicates_and_store_unique(folder_c, output_folder)
     else:
         print("Error: Folder `C` does not exist.")
