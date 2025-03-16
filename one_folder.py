@@ -12,9 +12,12 @@ register_heif_opener()
 # Optimized thread count
 MAX_THREADS = min(32, os.cpu_count() * 2)
 
+IMAGE_EXTENSIONS = {".heic", ".jpg", ".jpeg", ".png"}
+VIDEO_EXTENSIONS = {".mp4", ".mov"}
+
 def clean_up_videos(folder, video_output_folder):
-    """Deletes MP4s if a matching HEIC exists & moves standalone MP4s/MOVs to videos/."""
-    heic_files = {os.path.splitext(entry.name)[0] for entry in os.scandir(folder) if entry.name.lower().endswith('.heic')}
+    """Deletes videos if a matching image exists & moves standalone videos to videos/."""
+    image_files = {os.path.splitext(entry.name)[0] for entry in os.scandir(folder) if os.path.splitext(entry.name)[1].lower() in IMAGE_EXTENSIONS}
     
     os.makedirs(video_output_folder, exist_ok=True)
     files = list(os.scandir(folder))
@@ -22,18 +25,15 @@ def clean_up_videos(folder, video_output_folder):
     for idx, entry in enumerate(tqdm(files, desc=f"🔍 Cleaning {folder}", unit="file")):
         file_path = entry.path
         file_base, file_ext = os.path.splitext(entry.name)
+        file_ext = file_ext.lower()
 
-        if file_ext.lower() == ".mp4":
-            if file_base in heic_files:
+        if file_ext in VIDEO_EXTENSIONS:
+            if file_base in image_files:
                 os.remove(file_path)
-                print(f"[{idx+1}/{len(files)}] 🗑️ Deleted {entry.name} (HEIC exists)")
+                print(f"[{idx+1}/{len(files)}] 🗑️ Deleted {entry.name} (Matching image exists)")
             else:
                 shutil.move(file_path, os.path.join(video_output_folder, entry.name))
                 print(f"[{idx+1}/{len(files)}] 📂 Moved {entry.name} → {video_output_folder}")
-
-        elif file_ext.lower() == ".mov":
-            shutil.move(file_path, os.path.join(video_output_folder, entry.name))
-            print(f"[{idx+1}/{len(files)}] 📂 Moved {entry.name} → {video_output_folder}")
 
 def get_image_hash(image_path):
     """Compute a SHA-256 hash of an image's pixel data (ignoring metadata)."""
@@ -47,7 +47,7 @@ def get_image_hash(image_path):
 def process_images(folder):
     """Scans & hashes images with multithreading and progress tracking."""
     image_hashes = {}
-    files = [entry for entry in os.scandir(folder) if entry.name.lower().endswith(('.heic', '.jpg', '.png'))]
+    files = [entry for entry in os.scandir(folder) if os.path.splitext(entry.name)[1].lower() in IMAGE_EXTENSIONS]
 
     with concurrent.futures.ThreadPoolExecutor(max_workers=MAX_THREADS) as executor:
         futures = {executor.submit(get_image_hash, entry.path): entry.path for entry in files}
